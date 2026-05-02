@@ -26,6 +26,11 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 pub(super) struct SharedSessionState {
     // The current active request id for the shared session (used if subsequent events do not provide a request id)
     current_response_id: Option<ResponseStreamId>,
+    /// Sticky gate for duplicate-suppression when replay targets a conversation we already
+    /// repopulated from appended follow-up scrollback.
+    should_suppress_replayed_response_for_existing_conversation: bool,
+    /// Per-stream latch derived from the gate above once we decide the current replay should be
+    /// ignored.
     should_skip_current_replayed_response: bool,
     // The participant who initiated the current response stream
     current_response_initiator: Option<ParticipantId>,
@@ -34,6 +39,13 @@ pub(super) struct SharedSessionState {
 }
 
 impl BlocklistAIController {
+    /// Controls whether replayed events for an already-restored shared-session conversation should
+    /// be ignored to avoid duplicating content appended from follow-up scrollback.
+    pub fn set_should_suppress_existing_agent_conversation_replay(&mut self, value: bool) {
+        self.shared_session_state
+            .should_suppress_replayed_response_for_existing_conversation = value;
+    }
+
     /// Returns the current conversation ID for the active shared session stream.
     /// Returns None if there's no active shared session conversation.
     pub(crate) fn get_current_shared_session_conversation_id(
@@ -217,6 +229,8 @@ impl BlocklistAIController {
         });
     }
 
+    /// Returns whether replayed events for an already-populated shared-session conversation should
+    /// be ignored to avoid duplicating content that was restored from scrollback.
     fn should_skip_replayed_response_for_existing_conversation(
         &self,
         existing_conversation_id: Option<AIConversationId>,
@@ -227,7 +241,9 @@ impl BlocklistAIController {
         };
         let model = self.terminal_model.lock();
         if !model.is_receiving_agent_conversation_replay()
-            || !model.should_suppress_existing_agent_conversation_replay()
+            || !self
+                .shared_session_state
+                .should_suppress_replayed_response_for_existing_conversation
         {
             return false;
         }
